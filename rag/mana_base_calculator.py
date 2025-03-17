@@ -1,130 +1,136 @@
+# rag/mana_base_calculator.py
+from typing import Dict, List, Any
+from collections import defaultdict
+
 class ManaBaseCalculator:
+    """
+    Calculates the appropriate mana base for a deck
+    Considers color distribution, mana curve, and format requirements
+    """
+    
     def __init__(self, card_db):
         self.card_db = card_db
-        
-    async def calculate_mana_base(self, deck_colors, format_name, spell_count, mana_requirements):
-        """Calculate optimal mana base for a deck"""
-        # Get format-legal lands
-        legal_lands = await self.card_db.get_format_legal_lands(format_name)
-        
-        # Filter by color identity
-        color_identity = "".join(sorted(deck_colors))
-        matching_lands = [land for land in legal_lands if self._matches_color_identity(land, color_identity)]
-        
-        # Categorize lands
-        land_categories = {
-            "dual_lands": [],
-            "fetch_lands": [],
-            "shock_lands": [],
-            "basic_lands": [],
-            "utility_lands": [],
-            "tri_lands": [],
-            "pain_lands": []
-        }
-        
-        for land in matching_lands:
-            category = self._categorize_land(land)
-            if category in land_categories:
-                land_categories[category].append(land)
-        
-        # Calculate land count
-        total_land_count = self._calculate_total_land_count(
-            spell_count, 
-            format_name, 
-            mana_requirements
-        )
-        
-        # Distribute lands by category
-        land_distribution = self._distribute_lands(
-            land_categories, 
-            total_land_count, 
-            deck_colors, 
-            mana_requirements
-        )
-        
-        return {
-            "total_land_count": total_land_count,
-            "land_distribution": land_distribution
-        }
     
-    def _matches_color_identity(self, land, color_identity):
-        """Check if a land matches the deck's color identity"""
-        # Implementation depends on card data structure
-        land_colors = set(land.get("color_identity", []))
-        return land_colors.issubset(set(color_identity))
-    
-    def _categorize_land(self, land):
-        """Categorize a land by its type"""
-        # Logic to categorize lands based on their characteristics
-        text = land.get("oracle_text", "").lower()
+    def calculate_mana_base(self, 
+                           deck: Dict[str, int], 
+                           colors: List[str],
+                           format_name: str) -> Dict[str, int]:
+        """
+        Calculate the mana base for a deck
         
-        if "search your library for a" in text and "land" in text:
-            return "fetch_lands"
-        elif "enters the battlefield" in text and "pay 2 life" in text:
-            return "shock_lands"
-        elif "enters the battlefield tapped" in text and any(f"add {c}" in text for c in "WUBRG"):
-            return "dual_lands"
-        elif land.get("type_line", "").lower() == "basic land":
-            return "basic_lands"
-        # Add more categorization logic...
-        
-        return "utility_lands"
-    
-    def _calculate_total_land_count(self, spell_count, format_name, mana_requirements):
-        """Calculate total land count based on spell count and format"""
-        # Base land count by format
-        format_base = {
-            "standard": 24,
-            "modern": 22,
-            "commander": 38,
-            "legacy": 20,
-            "vintage": 18
-        }
-        
-        base_count = format_base.get(format_name.lower(), 24)
-        
-        # Adjust based on average CMC
-        avg_cmc = sum(mana_requirements.values()) / len(mana_requirements)
-        cmc_adjustment = round((avg_cmc - 2.5) * 2)  # +/- 2 lands per +/- 1.0 average CMC
-        
-        return base_count + cmc_adjustment
-    
-    def _distribute_lands(self, land_categories, total_land_count, deck_colors, mana_requirements):
-        """Distribute lands across categories"""
-        # Calculate color proportions
-        total_pips = sum(mana_requirements.values())
-        color_proportions = {color: mana_requirements.get(color, 0) / total_pips for color in deck_colors}
-        
-        # Distribute lands
-        distribution = {}
-        
-        # Prioritize fixing for multicolor decks
-        if len(deck_colors) > 1:
-            # Assign dual lands first
-            dual_land_count = min(12, total_land_count // 3)
-            for land in land_categories["dual_lands"][:dual_land_count]:
-                distribution[land["name"]] = distribution.get(land["name"], 0) + 1
+        Args:
+            deck: Dictionary of non-land cards in the deck
+            colors: List of colors in the deck
+            format_name: Format for the deck
             
-            # Assign fetch lands
-            fetch_land_count = min(8, total_land_count // 4)
-            for land in land_categories["fetch_lands"][:fetch_land_count]:
-                distribution[land["name"]] = distribution.get(land["name"], 0) + 1
-            
-            # Fill remaining with basics proportional to color requirements
-            remaining = total_land_count - sum(distribution.values())
-            for color in deck_colors:
-                basic_name = f"Basic {color}"
-                count = round(remaining * color_proportions.get(color, 0))
-                distribution[basic_name] = distribution.get(basic_name, 0) + count
-        else:
-            # Mono-color deck - mostly basics with some utility lands
-            utility_count = min(4, total_land_count // 6)
-            for land in land_categories["utility_lands"][:utility_count]:
-                distribution[land["name"]] = distribution.get(land["name"], 0) + 1
+        Returns:
+            Dictionary of land cards to add to the deck
+        """
+        # Calculate color requirements
+        color_requirements = self._calculate_color_requirements(deck)
+        
+        # Determine total land count
+        total_land_count = self._determine_land_count(deck, format_name)
+        
+        # Calculate color distribution
+        color_distribution = self._calculate_color_distribution(color_requirements)
+        
+        # Build mana base
+        mana_base = {}
+        
+        # Add basic lands based on color distribution
+        basic_lands = {
+            "W": "Plains",
+            "U": "Island",
+            "B": "Swamp",
+            "R": "Mountain",
+            "G": "Forest"
+        }
+        
+        # Calculate how many lands of each color to add
+        remaining_lands = total_land_count
+        for color, percentage in color_distribution.items():
+            if color in basic_lands:
+                count = int(total_land_count * percentage)
+                mana_base[basic_lands[color]] = count
+                remaining_lands -= count
+        
+        # Distribute any remaining lands
+        if remaining_lands > 0:
+            # Add remaining lands to the colors with highest requirements
+            sorted_colors = sorted(color_distribution.items(), key=lambda x: x[1], reverse=True)
+            for color, _ in sorted_colors:
+                if remaining_lands <= 0:
+                    break
+                if color in basic_lands:
+                    mana_base[basic_lands[color]] = mana_base.get(basic_lands[color], 0) + 1
+                    remaining_lands -= 1
+        
+        return mana_base
+    
+    def _calculate_color_requirements(self, deck: Dict[str, int]) -> Dict[str, int]:
+        """Calculate color requirements based on mana costs"""
+        color_requirements = defaultdict(int)
+        
+        for card_name, count in deck.items():
+            card_data = self.card_db.get_card_by_name(card_name)
+            if card_data:
+                # Skip lands
+                if "Land" in card_data.get("types", []):
+                    continue
                 
-            # Fill rest with basics
-            remaining = total_land_count - sum(distribution.values())
-            basic_name = f"Basic {deck_colors[0]}"
-            distribution[basic_name] = distribution.get(basic_name, 0) + remaining
+                # Get mana cost
+                mana_cost = card_data.get("mana_cost", "")
+                
+                # Count colored mana symbols
+                for color in ["W", "U", "B", "R", "G"]:
+                    color_count = mana_cost.count(color)
+                    color_requirements[color] += color_count * count
         
-        return distribution
+        return dict(color_requirements)
+    
+    def _determine_land_count(self, deck: Dict[str, int], format_name: str) -> int:
+        """Determine the appropriate land count for the deck"""
+        # Count non-land cards
+        non_land_count = 0
+        for card_name, count in deck.items():
+            card_data = self.card_db.get_card_by_name(card_name)
+            if card_data and "Land" not in card_data.get("types", []):
+                non_land_count += count
+        
+        # Calculate average mana value
+        total_mana_value = 0
+        total_cards = 0
+        
+        for card_name, count in deck.items():
+            card_data = self.card_db.get_card_by_name(card_name)
+            if card_data and "Land" not in card_data.get("types", []):
+                mana_value = card_data.get("mana_value", card_data.get("cmc", 0))
+                total_mana_value += mana_value * count
+                total_cards += count
+        
+        avg_mana_value = total_mana_value / total_cards if total_cards > 0 else 0
+        
+        # Base land count on average mana value
+        if format_name.lower() == "commander":
+            return 38  # Commander decks typically run more lands
+        elif avg_mana_value >= 4.0:
+            return 26  # High curve decks need more lands
+        elif avg_mana_value >= 3.0:
+            return 24  # Medium curve decks
+        else:
+            return 22  # Low curve decks
+    
+    def _calculate_color_distribution(self, color_requirements: Dict[str, int]) -> Dict[str, float]:
+        """Calculate color distribution for lands"""
+        total_requirements = sum(color_requirements.values())
+        
+        if total_requirements == 0:
+            # If no color requirements, distribute evenly
+            num_colors = len(color_requirements)
+            if num_colors == 0:
+                return {}
+            return {color: 1.0 / num_colors for color in color_requirements}
+        
+        # Calculate percentage for each color
+        return {color: count / total_requirements for color, count in color_requirements.items()}

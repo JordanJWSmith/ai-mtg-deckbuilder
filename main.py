@@ -2,14 +2,14 @@
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import asyncio
 import logging
 
 from dependencies import get_card_db, get_vector_db, get_openai_client
-from services.rag_engine import DeckbuilderRAGQueryEngine
-from services.deck_constructor import DeckConstructor
-from services.deck_optimizer import DeckOptimizer
+from services.deck_request_extractor import DeckRequestExtractor
+from services.deck_constructor import DeckConstructorService
+from services.deck_optimizer import DeckOptimizerService
 from services.explanation_generator import ExplanationGenerator
+from rag.query_engine import DeckbuilderRAGQueryEngine
 
 app = FastAPI(title="MTG AI Deckbuilder API")
 
@@ -21,7 +21,7 @@ class DeckRequest(BaseModel):
     mechanics: Optional[List[str]] = None
 
 class DeckOptimizationRequest(BaseModel):
-    decklist: Dict[str, int]
+    decklist: Dict[str, int]  # Card name to count mapping
     format: str
 
 class DeckResponse(BaseModel):
@@ -44,45 +44,56 @@ async def generate_deck(
     openai_client=Depends(get_openai_client)
 ):
     try:
-        # Initialize RAG engine
+        # Initialize components
         rag_engine = DeckbuilderRAGQueryEngine(openai_client, vector_db)
+        extractor = DeckRequestExtractor(openai_client)
+        constructor = DeckConstructorService(openai_client, card_db, vector_db)
+        explanation_gen = ExplanationGenerator(openai_client)
         
-        # Process deck request
-        card_pool = await rag_engine.process_deck_request(
+        # Extract deck parameters from description
+        deck_params = await extractor.extract_deck_parameters(
             request.description,
             request.format,
-            request.specific_cards
+            request.mechanics
+        )
+        
+        # Process deck request
+        card_pool = await rag_engine.retrieve_card_pool(
+            deck_params,
+            request.format
         )
         
         # Construct deck
-        deck_constructor = DeckConstructor(openai_client, card_db)
-        deck = await deck_constructor.construct_deck(
+        deck = await constructor.construct_deck(
             card_pool,
-            rag_engine.extracted_params,
+            deck_params,
             request.format,
             request.specific_cards
         )
         
         # Generate explanations
-        explanation_generator = ExplanationGenerator(openai_client)
-        explanations = await explanation_generator.generate_deck_explanation(
+        explanations = await explanation_gen.generate_deck_explanation(
             deck,
+            deck_params,
             request.description,
             request.format
         )
+        
+        # Calculate mana curve
+        mana_curve = constructor.calculate_mana_curve(deck)
         
         # Add to usage metrics in background
         background_tasks.add_task(
             log_deck_generation,
             request.format,
-            rag_engine.extracted_params
+            deck_params
         )
         
         return {
             "deck_list": deck,
             "strategy_explanation": explanations["strategy"],
             "card_explanations": explanations["card_explanations"],
-            "mana_curve": calculate_mana_curve(deck)
+            "mana_curve": mana_curve
         }
     except Exception as e:
         logging.error(f"Error generating deck: {str(e)}")
@@ -92,11 +103,12 @@ async def generate_deck(
 async def optimize_deck(
     request: DeckOptimizationRequest,
     openai_client=Depends(get_openai_client),
-    vector_db=Depends(get_vector_db)
+    vector_db=Depends(get_vector_db),
+    card_db=Depends(get_card_db)
 ):
     try:
         # Initialize optimizer
-        optimizer = DeckOptimizer(openai_client, vector_db)
+        optimizer = DeckOptimizerService(openai_client, vector_db, card_db)
         
         # Get optimization suggestions
         optimization_results = await optimizer.optimize_deck(
@@ -105,9 +117,14 @@ async def optimize_deck(
         )
         
         return {
-            "suggestions": optimization_results["recommendations"],
+            "suggestions": optimization_results["suggestions"],
             "explanations": optimization_results["explanations"]
         }
     except Exception as e:
         logging.error(f"Error optimizing deck: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def log_deck_generation(format_name, deck_params):
+    """Log deck generation metrics for analytics"""
+    # Implementation to store metrics about generated decks
+    logging.info(f"Generated {format_name} deck with strategy: {deck_params['strategy']}")

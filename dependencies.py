@@ -6,7 +6,7 @@ from openai import AsyncOpenAI
 from pinecone import Pinecone
 from fastapi import Depends
 
-from databases import Database
+from database.databases import Database
 
 @lru_cache()
 def get_openai_client():
