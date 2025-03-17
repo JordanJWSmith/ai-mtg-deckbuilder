@@ -6,6 +6,7 @@ from openai import AsyncOpenAI
 from pinecone import Pinecone
 from fastapi import Depends
 
+from rag.query_engine import DeckbuilderRAGQueryEngine
 from database.databases import Database
 
 @lru_cache()
