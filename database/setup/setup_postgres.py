@@ -1,4 +1,17 @@
 # process_mtgjson.py
+
+##########################################
+### DOWNLOAD SOURCE FILES ###
+# Download the most comprehensive file (AllPrintings)
+# curl -o AllPrintings.json https://mtgjson.com/api/v5/AllPrintings.json
+
+# OR download the atomic cards file for a smaller file with unique cards
+# curl -o AtomicCards.json https://mtgjson.com/api/v5/AtomicCards.json
+
+# Download format legality information
+# curl -o Legalities.json https://mtgjson.com/api/v5/Legalities.json
+##########################################
+
 import json
 import os
 import psycopg2
