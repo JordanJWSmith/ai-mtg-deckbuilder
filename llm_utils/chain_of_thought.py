@@ -1,3 +1,5 @@
+from llm_context import prepare_llm_context
+
 async def construct_deck_with_cot(card_pool, deck_params, format_name, openai_client):
     """Construct a deck using chain-of-thought reasoning"""
     
